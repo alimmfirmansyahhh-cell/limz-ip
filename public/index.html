@@ -20,7 +20,6 @@
 <body class="min-h-screen p-4 flex justify-center pb-20">
     <div class="w-full max-w-2xl mt-10 flex flex-col gap-6">
 
-        <!-- HEADER -->
         <div class="flex justify-between items-center glass-panel p-4 rounded-xl hidden" id="app-header">
             <div>
                 <h1 class="text-xl font-bold text-white">SuperProxy <span class="text-orange-500">DataImpulse</span></h1>
@@ -29,7 +28,6 @@
             <button onclick="doLogout()" class="bg-red-500/20 text-red-400 px-4 py-2 rounded-lg text-sm font-bold hover:bg-red-500 hover:text-white">Logout</button>
         </div>
 
-        <!-- VIEW: AUTH -->
         <div id="view-auth" class="glass-panel p-8 rounded-2xl flex-col gap-5 hidden">
             <div class="text-center mb-2">
                 <h2 class="text-2xl font-extrabold text-white" id="auth-title">Masuk ke Sistem</h2>
@@ -41,9 +39,7 @@
             <p class="text-xs text-center text-gray-400 cursor-pointer hover:text-white mt-2" onclick="toggleAuthMode()" id="auth-toggle-text">Belum punya akun? Daftar</p>
         </div>
 
-        <!-- VIEW: DASHBOARD USER -->
         <div id="view-user" class="hidden flex-col gap-6">
-            
             <div class="glass-panel p-6 rounded-xl border border-gray-600/50">
                 <h2 class="text-lg font-bold text-white mb-2">Kredensial DataImpulse</h2>
                 <p class="text-xs text-gray-400 mb-4">Masukin username & password akun DataImpulse lu di sini.</p>
@@ -99,7 +95,6 @@
             </div>
         </div>
 
-        <!-- VIEW: ADMIN -->
         <div id="view-admin" class="hidden flex-col gap-6">
             <div class="glass-panel p-6 rounded-xl border border-orange-500/30">
                 <h2 class="text-xl font-bold text-orange-500 mb-4">Admin Panel</h2>
@@ -224,7 +219,7 @@
             
             btn.innerText = "Mencari IP... (Sabar)"; btn.disabled = true;
             resBox.classList.remove('hidden'); resBox.classList.add('flex'); statusBar.classList.add('hidden');
-            resBox.innerHTML = "<span class='text-yellow-400 text-sm'>[*] Menjalankan skenario percobaan...</span>";
+            resBox.innerHTML = "<span class='text-yellow-400 text-sm'>[*] Menjalankan skenario berurutan (Waterfall)...</span>";
 
             try {
                 const res = await fetch('/api/auto-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetIp }) });
@@ -232,9 +227,9 @@
                 
                 if (data.results) {
                     const sukses = data.results.filter(r => r.status === 'Sukses');
-                    const gagal = data.results.filter(r => r.status !== 'Sukses');
+                    const lainnya = data.results.filter(r => r.status !== 'Sukses');
                     
-                    document.getElementById('success-ratio').innerText = `${sukses.length}/${data.results.length} skenario sukses`;
+                    document.getElementById('success-ratio').innerText = `${sukses.length} skenario sukses`;
 
                     let html = `
                         <div class="bg-[#1a1d27] border border-gray-600 rounded-lg p-4 mb-2">
@@ -287,27 +282,31 @@
                             `;
                         });
                     } else {
-                        html += `<div class="bg-red-500/10 border border-red-500 p-4 rounded-lg text-red-400 text-sm mt-2">[-] Tidak ada skenario yang sukses. Data Impulse kosong.</div>`;
+                        html += `<div class="bg-red-500/10 border border-red-500 p-4 rounded-lg text-red-400 text-sm mt-2">[-] Tidak ada skenario yang sukses di lokasi target.</div>`;
                     }
 
-                    if (gagal.length > 0) {
+                    if (lainnya.length > 0) {
                         html += `
                         <details class="mt-4 bg-[#0d1117] border border-gray-700 rounded-lg overflow-hidden group">
                             <summary class="p-3 text-sm font-bold text-gray-400 cursor-pointer hover:text-white list-none flex justify-between items-center bg-[#1a1d27]">
-                                <span>Lihat ${gagal.length} Percobaan Gagal</span>
+                                <span>Lihat ${lainnya.length} Percobaan Gagal / Skip</span>
                                 <span class="text-xs group-open:rotate-180 transition-transform">▼</span>
                             </summary>
                             <div class="p-3 flex flex-col gap-2">
                         `;
-                        gagal.forEach(r => {
+                        lainnya.forEach(r => {
+                            const isSkip = r.status === 'Skip';
+                            const borderColor = isSkip ? 'border-gray-700' : 'border-red-500/20';
+                            const badgeBg = isSkip ? 'bg-gray-700 text-gray-300' : 'bg-red-500/20 text-red-400';
+                            
                             html += `
-                                <div class="bg-[#1a1d27] border border-red-500/20 rounded p-3">
+                                <div class="bg-[#1a1d27] border ${borderColor} rounded p-3">
                                     <div class="flex justify-between items-center mb-1">
                                         <span class="text-gray-300 font-bold text-xs">${r.name}</span>
-                                        <span class="bg-red-500/20 text-red-400 px-2 py-0.5 rounded text-[10px] font-bold border border-red-500/30">Gagal</span>
+                                        <span class="${badgeBg} px-2 py-0.5 rounded text-[10px] font-bold border border-black/30">${r.status}</span>
                                     </div>
                                     <div class="text-[11px] text-gray-500 font-mono break-all mb-1">${r.username}</div>
-                                    <div class="text-xs text-red-400">${r.error}</div>
+                                    <div class="text-xs ${isSkip ? 'text-gray-500' : 'text-red-400'}">${r.error}</div>
                                 </div>
                             `;
                         });
