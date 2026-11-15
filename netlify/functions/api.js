@@ -4,25 +4,30 @@ const { HttpsProxyAgent } = require('https-proxy-agent');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
-const fs = require('fs');
 const serverless = require('serverless-http');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
-const DB_PATH = '/tmp/database.json';
 const JWT_SECRET = 'super-secret-key-dapur-6767';
 const ADMIN_EMAIL = 'alimmfirmansyahhh@gmail.com';
 
-const readDB = () => {
-    if (!fs.existsSync(DB_PATH)) fs.writeFileSync(DB_PATH, JSON.stringify({ users: [] }));
-    try { return JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); } catch (e) { return { users: [] }; }
-};
-const writeDB = (data) => fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
+// Init Supabase (Ngambil dari Environment Variables Netlify)
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-const dbData = readDB();
-if (!dbData.users.find(u => u.email === ADMIN_EMAIL)) {
-    dbData.users.push({ id: Date.now(), email: ADMIN_EMAIL, password: bcrypt.hashSync('muhlis144', 10), is_vip: 1, di_user: '', di_pass: '' });
-    writeDB(dbData);
-}
+// Cek & Bikin Akun Admin Default Pas Startup
+(async () => {
+    try {
+        const { data: admin } = await supabase.from('users').select('*').eq('email', ADMIN_EMAIL).single();
+        if (!admin) {
+            await supabase.from('users').insert([{
+                email: ADMIN_EMAIL,
+                password: bcrypt.hashSync('muhlis144', 10),
+                is_vip: 1
+            }]);
+            console.log("Admin default dibuat.");
+        }
+    } catch (e) { /* Abaikan error inisialisasi */ }
+})();
 
 app.use((req, res, next) => {
     if (req.url.startsWith('/.netlify/functions/api')) req.url = req.url.replace('/.netlify/functions/api', '');
@@ -38,20 +43,27 @@ const requireAuth = (req, res, next) => {
     try { req.user = jwt.verify(token, JWT_SECRET); next(); } catch (err) { return res.status(401).json({ error: 'Sesi expired.' }); }
 };
 
-app.post('/api/register', (req, res) => {
+app.post('/api/register', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !email.toLowerCase().endsWith('@gmail.com')) return res.status(400).json({ error: 'Wajib pake email @gmail.com!' });
-    const db = readDB();
-    if (db.users.find(u => u.email === email.toLowerCase())) return res.status(400).json({ error: 'Email sudah dipakai.' });
-    db.users.push({ id: Date.now(), email: email.toLowerCase(), password: bcrypt.hashSync(password, 10), is_vip: 0, di_user: '', di_pass: '' });
-    writeDB(db);
+    
+    const { data: existing } = await supabase.from('users').select('email').eq('email', email.toLowerCase()).single();
+    if (existing) return res.status(400).json({ error: 'Email sudah dipakai.' });
+    
+    const { error } = await supabase.from('users').insert([{
+        email: email.toLowerCase(),
+        password: bcrypt.hashSync(password, 10),
+        is_vip: 0
+    }]);
+    
+    if (error) return res.status(500).json({ error: 'Gagal daftar.' });
     res.json({ success: true });
 });
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
-    const db = readDB();
-    const user = db.users.find(u => u.email === email.toLowerCase());
+    const { data: user } = await supabase.from('users').select('*').eq('email', email.toLowerCase()).single();
+    
     if (user && bcrypt.compareSync(password, user.password)) {
         const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '1d' });
         res.cookie('auth_token', token, { httpOnly: true, sameSite: 'lax', secure: true, maxAge: 86400000 });
@@ -61,16 +73,13 @@ app.post('/api/login', (req, res) => {
 
 app.post('/api/logout', (req, res) => { res.clearCookie('auth_token'); res.json({ success: true }); });
 
-app.get('/api/me', requireAuth, (req, res) => {
-    const db = readDB();
-    const user = db.users.find(u => u.id === req.user.id);
-    res.json({ id: user.id, email: user.email, is_vip: user.is_vip, di_user: user.di_user, di_pass: user.di_pass });
+app.get('/api/me', requireAuth, async (req, res) => {
+    const { data: user } = await supabase.from('users').select('id, email, is_vip, di_user, di_pass').eq('id', req.user.id).single();
+    res.json(user);
 });
 
-app.post('/api/save-creds', requireAuth, (req, res) => {
-    const db = readDB();
-    const user = db.users.find(u => u.id === req.user.id);
-    if (user) { user.di_user = req.body.di_user; user.di_pass = req.body.di_pass; writeDB(db); }
+app.post('/api/save-creds', requireAuth, async (req, res) => {
+    await supabase.from('users').update({ di_user: req.body.di_user, di_pass: req.body.di_pass }).eq('id', req.user.id);
     res.json({ success: true });
 });
 
@@ -110,8 +119,7 @@ app.post('/api/check-location', requireAuth, async (req, res) => {
 });
 
 app.post('/api/auto-check', requireAuth, async (req, res) => {
-    const db = readDB();
-    const user = db.users.find(u => u.id === req.user.id);
+    const { data: user } = await supabase.from('users').select('*').eq('id', req.user.id).single();
     if (!user || !user.is_vip) return res.status(403).json({ error: 'Akses Ditolak. Bukan VIP.' });
     if (!user.di_user || !user.di_pass) return res.status(400).json({ error: 'Kredensial DI kosong.' });
 
@@ -160,7 +168,6 @@ app.post('/api/auto-check', requireAuth, async (req, res) => {
                 if (r.data.success) {
                     const rCountry = (r.data.country_code || '').toLowerCase();
                     
-                    // Validasi Mutlak: Kalau beda negara, reject!
                     if (rCountry !== c) {
                         results.push({ name: scenario.name, username: username, status: 'Gagal', error: `Meleset ke ${r.data.country} (${r.data.country_code})` });
                         continue;
@@ -175,7 +182,7 @@ app.post('/api/auto-check', requireAuth, async (req, res) => {
                     const isCity = rCity === ct;
                     const isAsn = rAsn === String(asn);
 
-                    let pct = 30; // Minimal dapet negara
+                    let pct = 30;
                     if (isState) pct += 20;
                     if (isCity) pct += 20;
                     if (isAsn) pct += 30;
@@ -185,7 +192,7 @@ app.post('/api/auto-check', requireAuth, async (req, res) => {
                         const fullParams = { cr: c, state: st, city: ct, zip: zp, asn: asn };
                         const fullPStr = Object.entries(fullParams).filter(([_,v]) => v).map(([k,v]) => `${k}.${v}`).join(';');
                         finalUsername = `${user.di_user}__${fullPStr}`;
-                        foundPerfect = true; // Berenti loop
+                        foundPerfect = true;
                     }
 
                     results.push({
@@ -211,11 +218,12 @@ const requireAdmin = (req, res, next) => {
     if (req.user.email !== ADMIN_EMAIL) return res.status(403).json({ error: 'Bukan Owner.' });
     next();
 };
-app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => res.json(readDB().users));
-app.post('/api/admin/grant-vip', requireAuth, requireAdmin, (req, res) => {
-    const db = readDB();
-    const user = db.users.find(u => u.id === req.body.userId);
-    if (user) { user.is_vip = req.body.isVip ? 1 : 0; writeDB(db); }
+app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
+    const { data: users } = await supabase.from('users').select('id, email, is_vip, di_user, di_pass');
+    res.json(users);
+});
+app.post('/api/admin/grant-vip', requireAuth, requireAdmin, async (req, res) => {
+    await supabase.from('users').update({ is_vip: req.body.isVip ? 1 : 0 }).eq('id', req.body.userId);
     res.json({ success: true });
 });
 
