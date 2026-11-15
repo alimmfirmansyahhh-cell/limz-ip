@@ -56,7 +56,8 @@ app.post('/api/register', async (req, res) => {
         is_vip: 0
     }]);
     
-    if (error) return res.status(500).json({ error: 'Gagal daftar.' });
+    // MENAMPILKAN ERROR ASLI DARI SUPABASE
+    if (error) return res.status(500).json({ error: error.message || 'Gagal daftar.' });
     res.json({ success: true });
 });
 
