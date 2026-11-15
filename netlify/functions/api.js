@@ -18,13 +18,17 @@ const readDB = () => {
 };
 const writeDB = (data) => fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
 
-// Init Admin Default
 const dbData = readDB();
 if (!dbData.users.find(u => u.email === ADMIN_EMAIL)) {
     dbData.users.push({ id: Date.now(), email: ADMIN_EMAIL, password: bcrypt.hashSync('muhlis144', 10), is_vip: 1, di_user: '', di_pass: '' });
     writeDB(dbData);
 }
 
+app.use((req, res, next) => {
+    if (req.url.startsWith('/.netlify/functions/api')) req.url = req.url.replace('/.netlify/functions/api', '');
+    if (!req.url.startsWith('/')) req.url = '/' + req.url;
+    next();
+});
 app.use(express.json());
 app.use(cookieParser());
 
@@ -128,13 +132,21 @@ app.post('/api/auto-check', requireAuth, async (req, res) => {
             { name: 'FULL + ZIP', params: { cr: c, state: st, city: ct, zip: zp, asn: asn } },
             { name: 'FULL (Region+City+ASN)', params: { cr: c, state: st, city: ct, asn: asn } },
             { name: 'STATE + ASN', params: { cr: c, state: st, asn: asn } },
-            { name: 'ASN_ONLY', params: { cr: c, asn: asn } },
             { name: 'KOTA tanpa ASN', params: { cr: c, state: st, city: ct } },
             { name: 'PROVINSI tanpa ASN', params: { cr: c, state: st } },
+            { name: 'ASN_ONLY', params: { cr: c, asn: asn } },
             { name: 'COUNTRY_ONLY', params: { cr: c } }
         ];
 
-        const testScenario = async (scenario) => {
+        const results = [];
+        let foundPerfect = false;
+
+        for (const scenario of scenarios) {
+            if (foundPerfect) {
+                results.push({ name: scenario.name, username: `-`, status: 'Skip', error: 'Dilewati (Sudah dapat yang cocok)' });
+                continue;
+            }
+
             const pStr = Object.entries(scenario.params).filter(([_,v]) => v).map(([k,v]) => `${k}.${v}`).join(';');
             const username = `${user.di_user}__${pStr}`;
             const proxyUrl = `http://${username}:${user.di_pass}@gw.dataimpulse.com:823`;
@@ -142,22 +154,28 @@ app.post('/api/auto-check', requireAuth, async (req, res) => {
             const start = Date.now();
 
             try {
-                const r = await axios.get('https://ipwho.is/', { httpsAgent: agent, timeout: 5000 });
+                const r = await axios.get('https://ipwho.is/', { httpsAgent: agent, timeout: 4000 });
                 const timeMs = Date.now() - start;
                 
                 if (r.data.success) {
+                    const rCountry = (r.data.country_code || '').toLowerCase();
+                    
+                    // Validasi Mutlak: Kalau beda negara, reject!
+                    if (rCountry !== c) {
+                        results.push({ name: scenario.name, username: username, status: 'Gagal', error: `Meleset ke ${r.data.country} (${r.data.country_code})` });
+                        continue;
+                    }
+
                     const rCity = (r.data.city || '').toLowerCase().replace(/ /g, '');
                     const rRegion = (r.data.region || '').toLowerCase().replace(/ /g, '');
-                    const rCountry = (r.data.country_code || '').toLowerCase();
                     const rAsn = String(r.data.connection.asn);
 
-                    const isCountry = rCountry === c;
+                    const isCountry = true; 
                     const isState = rRegion === st;
                     const isCity = rCity === ct;
                     const isAsn = rAsn === String(asn);
 
-                    let pct = 0;
-                    if (isCountry) pct += 30;
+                    let pct = 30; // Minimal dapet negara
                     if (isState) pct += 20;
                     if (isCity) pct += 20;
                     if (isAsn) pct += 30;
@@ -167,21 +185,22 @@ app.post('/api/auto-check', requireAuth, async (req, res) => {
                         const fullParams = { cr: c, state: st, city: ct, zip: zp, asn: asn };
                         const fullPStr = Object.entries(fullParams).filter(([_,v]) => v).map(([k,v]) => `${k}.${v}`).join(';');
                         finalUsername = `${user.di_user}__${fullPStr}`;
+                        foundPerfect = true; // Berenti loop
                     }
 
-                    return {
+                    results.push({
                         name: scenario.name, username: finalUsername, status: 'Sukses', percentage: pct, time: (timeMs / 1000).toFixed(1) + ' dtk',
                         exitIp: r.data.ip, exitCity: r.data.city, exitRegion: r.data.region, exitAsn: r.data.connection.asn, exitIsp: r.data.connection.isp,
                         matchDetails: { country: isCountry, state: isState, city: isCity, asn: isAsn }
-                    };
+                    });
+                } else {
+                    results.push({ name: scenario.name, username: username, status: 'Gagal', error: 'IP Kosong.' });
                 }
             } catch (e) {
-                return { name: scenario.name, username: username, status: 'Gagal', error: 'Timeout / Gateway 503.' };
+                results.push({ name: scenario.name, username: username, status: 'Gagal', error: 'Timeout / Gateway 503.' });
             }
-            return { name: scenario.name, username: username, status: 'Gagal', error: 'IP Kosong.' };
-        };
+        }
 
-        const results = await Promise.all(scenarios.map(s => testScenario(s)));
         const targetInfo = { ip: targetIp, country: geo.country_code, region: geo.region, city: geo.city, zip: geo.postal, asn: geo.connection.asn, isp: geo.connection.isp };
         res.json({ results, targetInfo });
 
@@ -200,5 +219,4 @@ app.post('/api/admin/grant-vip', requireAuth, requireAdmin, (req, res) => {
     res.json({ success: true });
 });
 
-// BUNGKUS EXPRESS BUAT NETLIFY
 module.exports.handler = serverless(app);
